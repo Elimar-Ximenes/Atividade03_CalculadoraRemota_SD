@@ -1,0 +1,11 @@
+Compilar todos os arquivos do diretório:
+javac *.java 
+
+Compilar os arquivos do diretório e colocar em outra pasta:
+javac -d .\bin .\src\*.java
+
+Executar Arquivo Java de uma Pastas:
+java -cp .\bin CalculadoraClientSocket	
+
+Apenas executar o arquivo já estando dentro da pasta:
+java CalculadoraClientSocket 
