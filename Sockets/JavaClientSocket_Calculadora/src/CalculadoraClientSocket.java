@@ -1,42 +1,67 @@
-import java.io.BufferedReader;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.Socket;
+import java.util.Scanner;
 
 public class CalculadoraClientSocket {
 
-	public static void main(String[] args) {
-		
-		// TODO Auto-generated method stub
-		double oper1=10,oper2=20;
-		int operacao=1; //1-somar 2-subtrair 3-dividir 4-multiplicar
-		String result="";
+    public static void main(String[] args) {
+
+        Scanner scanner = new Scanner(System.in);
+
+        System.out.println("============== CALCULADORA REMOTA ==============");
+        System.out.println("Escolha o modo de operação:");
+        System.out.println("1 - Modo 1 (Servidor resolve a expressão completa)");
+        System.out.println("2 - Modo 2 (Cliente resolve usando múltiplas chamadas)");
+        System.out.print("Opção: ");
+        int modo = scanner.nextInt();
+        scanner.nextLine(); // consumir newline
+
+        System.out.println("\nDigite a expressão (ex: (10+5)*3 ): ");
+        String expressao = scanner.nextLine();
+
+        // Converte para RPN
+        String rpn = RPNConverter.toRPN(expressao);
+        System.out.println("\nExpressão convertida para RPN: " + rpn);
+
         try {
+            if (modo == 1) {
+                // =======================
+                //  MODO 1: SERVIDOR CALCULA
+                // =======================
+                System.out.println("\n[MODO 1] Servidor calculará a expressão completa.");
 
-        	//Conex�o com o Servidor
-            Socket clientSocket = new Socket("127.0.0.1", 9090);
-            DataOutputStream socketSaidaServer = new DataOutputStream(clientSocket.getOutputStream());
-            
-            //Enviando os dados
-            socketSaidaServer.writeBytes(operacao+"\n");
-            socketSaidaServer.writeBytes(oper1+ "\n");
-            socketSaidaServer.writeBytes( oper2+ "\n");
-            socketSaidaServer.flush();
+                Socket clientSocket = new Socket("127.0.0.1", 9090);
+                DataOutputStream socketSaidaServer =
+                        new DataOutputStream(clientSocket.getOutputStream());
 
-            //Recebendo a resposta
-            BufferedReader messageFromServer = new BufferedReader
-                    (new InputStreamReader(clientSocket.getInputStream()));
-            result=messageFromServer.readLine();
-            
-            System.out.println("resultado="+result);
-            clientSocket.close();
+                socketSaidaServer.writeBytes("5\n"); // operação 5 = cálculo RPN completa
+                socketSaidaServer.writeBytes(rpn + "\n");
+                socketSaidaServer.flush();
 
-        } catch (IOException e) {
+                BufferedReader messageFromServer =
+                        new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+
+                String resultado = messageFromServer.readLine();
+                System.out.println("Resultado recebido do servidor: " + resultado);
+
+                clientSocket.close();
+
+            } else if (modo == 2) {
+                // =======================
+                //  MODO 2: CLIENTE CHAMA O SERVIDOR VÁRIAS VEZES
+                // =======================
+                System.out.println("\n[MODO 2] Cliente vai decompor e chamar o servidor várias vezes.");
+
+                double resultadoFinal = ClienteOperacoes.avaliarRPN_Cliente(rpn);
+
+                System.out.println("Resultado final calculado pelo cliente (modo 2): " + resultadoFinal);
+
+            } else {
+                System.out.println("Opção inválida!");
+            }
+
+        } catch (Exception e) {
             e.printStackTrace();
         }
-
-
-	}
-
+    }
 }
