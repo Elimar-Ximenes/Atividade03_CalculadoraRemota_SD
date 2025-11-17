@@ -1,0 +1,8 @@
+Criar e executar conteiner no Docker (Esse só precisa executar uma vez):
+docker run -d -p 8080:80 -v ${PWD}:/var/www/html --name calculadora php:8.1-apache
+
+Executar conteiner:
+docker start calculadora
+
+Parar conteiner:
+docker stop calculadora

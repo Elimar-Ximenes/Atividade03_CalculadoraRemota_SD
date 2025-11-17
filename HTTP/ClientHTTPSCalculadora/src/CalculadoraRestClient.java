@@ -1,4 +1,3 @@
-
 import java.awt.BorderLayout;
 import java.awt.EventQueue;
 import java.awt.FlowLayout;
@@ -7,11 +6,11 @@ import java.awt.event.ActionListener;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.MalformedURLException;
+import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.util.stream.Collectors;
 
-import javax.net.ssl.HttpsURLConnection;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JFrame;
@@ -46,7 +45,7 @@ public class CalculadoraRestClient extends JFrame {
         inputPanel.add(operador2TextField);
 
         inputPanel.add(new JLabel("Operação:"));
-        operacaoComboBox = new JComboBox<>(new String[] {"soma", "subtração", "multiplicação", "divisão"});
+        operacaoComboBox = new JComboBox<>(new String[]{"soma", "subtração", "multiplicação", "divisão"});
         inputPanel.add(operacaoComboBox);
 
         JButton calcularButton = new JButton("Calcular");
@@ -73,34 +72,51 @@ public class CalculadoraRestClient extends JFrame {
     }
 
     private void calcular() {
-        String operador1 = operador1TextField.getText();
-        String operador2 = operador2TextField.getText();
-        String urlStr = "https://calculadora-fxpc.onrender.com/operation/soma/" + operador1 + "/" + operador2;
-
         try {
-            URL url = new URL(urlStr);
-            HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
+            String operador1 = operador1TextField.getText();
+            String operador2 = operador2TextField.getText();
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            int operacao = operacaoComboBox.getSelectedIndex() + 1;
+
+            URI uri = new URI("http://localhost:8080/calculadora.php");
+            URL url = uri.toURL(); 
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+
+            String params = "oper1=" + operador1 +
+                            "&oper2=" + operador2 +
+                            "&operacao=" + operacao;
+
+            conn.getOutputStream().write(params.getBytes());
+
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream())
+            );
+
             String json = reader.lines().collect(Collectors.joining());
             reader.close();
 
-            String resultado = json.split("\"result\":")[1].split("}")[0];
+            // Extrair resultado do JSON
+            String resultado = json.split("\"resultado\":")[1]
+                                   .split("}")[0]
+                                   .replace(":", "")
+                                   .trim();
+
             resultadoTextField.setText(resultado);
-        } catch (MalformedURLException e) {
-            System.out.println("URL inválida: " + urlStr);
+
         } catch (IOException e) {
-            System.out.println("Erro ao conectar ao servidor: " + e.getMessage());
+            resultadoTextField.setText("Erro!");
+            e.printStackTrace();
+        } catch (Exception e) {
+            resultadoTextField.setText("Erro!");
+            e.printStackTrace();
         }
     }
 
     public static void main(String[] args) {
-        EventQueue.invokeLater(new Runnable() {
-            @Override
-            public void run() {
-                new CalculadoraRestClient();
-            }
-        });
+        EventQueue.invokeLater(() -> new CalculadoraRestClient());
     }
 }
