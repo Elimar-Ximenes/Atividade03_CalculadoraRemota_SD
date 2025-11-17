@@ -1,36 +1,64 @@
-import java.rmi.AccessException;
-import java.rmi.AlreadyBoundException;
-import java.rmi.RemoteException;
-import java.rmi.registry.LocateRegistry;
-import java.rmi.registry.Registry;
-import java.rmi.server.UnicastRemoteObject;
+import java.util.Stack;
 
-public class Calculadora  implements ICalculadora {
+public class Calculadora {
 
-	private static final long serialVersionUID = 1L;
-	
-	private static int chamadas = 0;
+    public String sayHello(String nome, String sobrenome) {
+        return "Fala " + nome + " " + sobrenome;
+    }
 
-	public int soma(int a, int b) throws RemoteException {
-		System.out.println("Método soma chamado " + chamadas++);
-		return a + b;
-	}
+    public double soma(double oper1, double oper2) {
+        return oper1 + oper2;
+    }
 
-	public static void main(String[] args) throws AccessException, RemoteException, AlreadyBoundException  {
-		Calculadora calculadora = new Calculadora();		
-		Registry reg = null;
-		ICalculadora stub = (ICalculadora) UnicastRemoteObject.
-				exportObject(calculadora, 1100);
-		try {
-			System.out.println("Creating registry...");
-			reg = LocateRegistry.createRegistry(1099);
-		} catch (Exception e) {
-			try {
-				reg = LocateRegistry.getRegistry(1099);
-			} catch (Exception e1) {
-				System.exit(0);
-			}
-		}
-		reg.rebind("calculadora", stub);
-	}
+    public double subtrai(double oper1, double oper2) {
+        return oper1 - oper2;
+    }
+
+    public double multiplica(double oper1, double oper2) {
+        return oper1 * oper2;
+    }
+
+    public double divide(double oper1, double oper2) {
+        return oper1 / oper2;
+    }
+
+    // ============================================
+    // Avaliação de expressão em Notação Polonesa Reversa (RPN)
+    // Exemplo de entrada: "10 15 + 4 *"
+    // ============================================
+    public double calculaRPN(String expressao) {
+
+        Stack<Double> pilha = new Stack<>();
+        String[] tokens = expressao.split(" ");
+
+        for (String t : tokens) {
+            switch (t) {
+                case "+":
+                    pilha.push(pilha.pop() + pilha.pop());
+                    break;
+
+                case "-":
+                    double b = pilha.pop();
+                    double a = pilha.pop();
+                    pilha.push(a - b);
+                    break;
+
+                case "*":
+                    pilha.push(pilha.pop() * pilha.pop());
+                    break;
+
+                case "/":
+                    double divisor = pilha.pop();
+                    double dividendo = pilha.pop();
+                    pilha.push(dividendo / divisor);
+                    break;
+
+                default:
+                    // Se não for operador, é número
+                    pilha.push(Double.parseDouble(t));
+            }
+        }
+
+        return pilha.pop();
+    }
 }
