@@ -1,53 +1,85 @@
 <?php
-// Calculadora remota via POST
+// calculadora.php
+// API calculadora remota via POST
+// Operações suportadas:
+// 1 = soma
+// 2 = subtração
+// 3 = multiplicação
+// 4 = divisão
+// 5 = expressão em RPN ("10 15 + 4 *")
 
-// Função para validar e converter valores
-function getPostValue($key) {
-    return isset($_POST[$key]) ? floatval($_POST[$key]) : null;
-}
+header('Content-Type: application/json; charset=utf-8');
 
-$oper1 = getPostValue('oper1');
-$oper2 = getPostValue('oper2');
+// importa funções auxiliares
+require_once 'funcoes.php';
+
+// dados recebidos
+$oper1 = getPostFloat('oper1');
+$oper2 = getPostFloat('oper2');
 $operacao = isset($_POST['operacao']) ? intval($_POST['operacao']) : null;
+$expressao = getPostString('expressao');
 
-$resultado = null;
-$erro = null;
+// estrutura padrão de resposta
+$response = [
+    'ok' => false,
+    'erro' => null,
+    'resultado' => null,
+];
 
-if ($oper1 === null || $oper2 === null || $operacao === null) {
-    $erro = "Parâmetros inválidos. Envie 'oper1', 'oper2' e 'operacao' via POST.";
-} else {
-    switch ($operacao) {
-        case 1: // Soma
-            $resultado = $oper1 + $oper2;
-            break;
-        case 2: // Subtração
-            $resultado = $oper1 - $oper2;
-            break;
-        case 3: // Multiplicação
-            $resultado = $oper1 * $oper2;
-            break;
-        case 4: // Divisão
-            if ($oper2 == 0) {
-                $erro = "Erro: divisão por zero.";
-            } else {
-                $resultado = $oper1 / $oper2;
-            }
-            break;
-        default:
-            $erro = "Operação inválida. Use 1 (soma), 2 (subtração), 3 (multiplicação) ou 4 (divisão).";
+try {
+    if ($operacao === null) {
+        throw new Exception("Parâmetro 'operacao' obrigatório (1..5).");
     }
+
+    switch ($operacao) {
+
+        case 1: // soma
+            if ($oper1 === null || $oper2 === null) {
+                throw new Exception("Envie 'oper1' e 'oper2' para soma.");
+            }
+            $response['resultado'] = $oper1 + $oper2;
+            break;
+
+        case 2: // subtração
+            if ($oper1 === null || $oper2 === null) {
+                throw new Exception("Envie 'oper1' e 'oper2' para subtração.");
+            }
+            $response['resultado'] = $oper1 - $oper2;
+            break;
+
+        case 3: // multiplicação
+            if ($oper1 === null || $oper2 === null) {
+                throw new Exception("Envie 'oper1' e 'oper2' para multiplicação.");
+            }
+            $response['resultado'] = $oper1 * $oper2;
+            break;
+
+        case 4: // divisão
+            if ($oper1 === null || $oper2 === null) {
+                throw new Exception("Envie 'oper1' e 'oper2' para divisão.");
+            }
+            if ($oper2 == 0.0) {
+                throw new Exception("Divisão por zero.");
+            }
+            $response['resultado'] = $oper1 / $oper2;
+            break;
+
+        case 5: // expressão em RPN
+            if ($expressao === null || $expressao === "") {
+                throw new Exception("Envie 'expressao' (RPN) para operacao=5.");
+            }
+            $response['resultado'] = evalRPN($expressao);
+            break;
+
+        default:
+            throw new Exception("Operação inválida. Use 1..5.");
+    }
+
+    $response['ok'] = true;
+
+} catch (Exception $ex) {
+    $response['erro'] = $ex->getMessage();
 }
 
-// Retorno em JSON
-header('Content-Type: application/json');
-
-if ($erro) {
-    echo json_encode(["erro" => $erro]);
-} else {
-    echo json_encode([
-        "oper1" => $oper1,
-        "oper2" => $oper2,
-        "operacao" => $operacao,
-        "resultado" => $resultado
-    ]);
-}
+// envia resposta JSON
+echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);

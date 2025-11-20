@@ -1,122 +1,244 @@
-import java.awt.BorderLayout;
-import java.awt.EventQueue;
-import java.awt.FlowLayout;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
+// Importa classes necessárias para leitura de dados, conexão HTTP e manipulação de strings
 import java.io.BufferedReader;
-import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
-import java.util.stream.Collectors;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.Scanner;
+import java.util.Stack;
 
-import javax.swing.JButton;
-import javax.swing.JComboBox;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JPanel;
-import javax.swing.JTextField;
+// Classe principal do cliente REST
+public class CalculadoraRestClient {
 
-public class CalculadoraRestClient extends JFrame {
-    private JTextField operador1TextField;
-    private JTextField operador2TextField;
-    private JComboBox<String> operacaoComboBox;
-    private JTextField resultadoTextField;
+    public static void main(String[] args) {
 
-    public CalculadoraRestClient() {
-        super("Calculadora REST Client");
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        // Leitor de entrada do usuário
+        Scanner scanner = new Scanner(System.in);
 
-        JPanel panel = new JPanel();
-        panel.setLayout(new BorderLayout());
-        add(panel);
+        // Menu inicial exibido ao usuário
+        System.out.println("============== CALCULADORA REMOTA (REST) ==============");
+        System.out.println("Escolha o modo de operação:");
+        System.out.println("1 - Modo 1 (Servidor REST resolve a expressão completa)");
+        System.out.println("2 - Modo 2 (Cliente resolve usando múltiplas chamadas REST)");
+        System.out.print("Opção: ");
 
-        JPanel inputPanel = new JPanel();
-        inputPanel.setLayout(new FlowLayout(FlowLayout.LEFT));
-        panel.add(inputPanel, BorderLayout.NORTH);
+        // Lê o modo escolhido
+        int modo = scanner.nextInt();
+        scanner.nextLine();   // limpa buffer
 
-        inputPanel.add(new JLabel("Operador 1:"));
-        operador1TextField = new JTextField(10);
-        inputPanel.add(operador1TextField);
+        // Solicita a expressão ao usuário
+        System.out.println("\nDigite a expressão (ex: (10+5)*3 ): ");
+        String expressaoInfixa = scanner.nextLine();
 
-        inputPanel.add(new JLabel("Operador 2:"));
-        operador2TextField = new JTextField(10);
-        inputPanel.add(operador2TextField);
+        // Converte a expressão de infixa para RPN
+        String expressaoRPN = RPNConverter.toRPN(expressaoInfixa);
+        System.out.println("\nExpressão convertida para RPN: " + expressaoRPN);
 
-        inputPanel.add(new JLabel("Operação:"));
-        operacaoComboBox = new JComboBox<>(new String[]{"soma", "subtração", "multiplicação", "divisão"});
-        inputPanel.add(operacaoComboBox);
-
-        JButton calcularButton = new JButton("Calcular");
-        calcularButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                calcular();
-            }
-        });
-        inputPanel.add(calcularButton);
-
-        JPanel outputPanel = new JPanel();
-        outputPanel.setLayout(new FlowLayout(FlowLayout.LEFT));
-        panel.add(outputPanel, BorderLayout.SOUTH);
-
-        outputPanel.add(new JLabel("Resultado da Operação:"));
-        resultadoTextField = new JTextField(10);
-        resultadoTextField.setEditable(false);
-        outputPanel.add(resultadoTextField);
-
-        pack();
-        setLocationRelativeTo(null);
-        setVisible(true);
-    }
-
-    private void calcular() {
         try {
-            String operador1 = operador1TextField.getText();
-            String operador2 = operador2TextField.getText();
 
-            int operacao = operacaoComboBox.getSelectedIndex() + 1;
+            // --- MODO 1 ---
+            if (modo == 1) {
 
-            URI uri = new URI("http://localhost:8080/calculadora.php");
-            URL url = uri.toURL(); 
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                // Envia TODA a expressão para o servidor em um único POST
+                double resultado = calcularExpressaoCompletaREST(expressaoRPN);
 
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                System.out.println("\nResultado recebido do servidor REST: " + resultado);
+            }
 
-            String params = "oper1=" + operador1 +
-                            "&oper2=" + operador2 +
-                            "&operacao=" + operacao;
+            // --- MODO 2 ---
+            else if (modo == 2) {
 
-            conn.getOutputStream().write(params.getBytes());
+                // Avalia a expressão passo a passo chamando o servidor para cada operação
+                double resultado = avaliarRPN_Cliente(expressaoRPN);
 
-            BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream())
-            );
+                System.out.println("\nResultado final calculado pelo cliente (modo 2): " + resultado);
+            }
 
-            String json = reader.lines().collect(Collectors.joining());
-            reader.close();
+            else {
+                System.out.println("Opção inválida!");
+            }
 
-            // Extrair resultado do JSON
-            String resultado = json.split("\"resultado\":")[1]
-                                   .split("}")[0]
-                                   .replace(":", "")
-                                   .trim();
-
-            resultadoTextField.setText(resultado);
-
-        } catch (IOException e) {
-            resultadoTextField.setText("Erro!");
-            e.printStackTrace();
         } catch (Exception e) {
-            resultadoTextField.setText("Erro!");
+            System.out.println("Erro ao comunicar com servidor REST!");
             e.printStackTrace();
         }
     }
 
-    public static void main(String[] args) {
-        EventQueue.invokeLater(() -> new CalculadoraRestClient());
+    // ============================================================
+    // MODO 1 – Envia a expressão completa em RPN ao servidor REST
+    // ============================================================
+    private static double calcularExpressaoCompletaREST(String rpn) throws Exception {
+
+        // Cria o objeto URI com o endereço do servidor
+        URI uri = new URI("http://localhost:8080/calculadora.php");
+
+        // Converte URI para URL
+        URL url = uri.toURL();
+
+        // Abre a conexão HTTP
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+        // Define que será utilizado o método POST
+        conn.setRequestMethod("POST");
+
+        // Permite envio de dados no corpo da requisição
+        conn.setDoOutput(true);
+
+        // Informa o tipo de conteúdo enviado (formulário HTML)
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+
+        // Monta os parâmetros de envio: operacao=5 indica cálculo completo
+        String params = "operacao=5&expressao=" + URLEncoder.encode(rpn, StandardCharsets.UTF_8);
+
+        // Envia os parâmetros para o servidor via POST
+        conn.getOutputStream().write(params.getBytes());
+
+        // Lê a resposta JSON do servidor
+        String json = lerJSON(conn);
+
+        // Extrai apenas o valor do campo "resultado"
+        String resultado = extrairCampoJSON(json, "resultado");
+
+        // Converte o resultado de String para double
+        return Double.parseDouble(resultado);
+    }
+
+    // ============================================================
+    // MODO 2 – Cliente resolve usando múltiplas chamadas ao servidor
+    // ============================================================
+    public static double avaliarRPN_Cliente(String rpn) throws Exception {
+
+        // Pilha utilizada para avaliar a expressão RPN
+        Stack<Double> pilha = new Stack<>();
+
+        // Divide a expressão RPN em tokens
+        String[] tokens = rpn.split("\\s+");
+
+        // Percorre cada token
+        for (String token : tokens) {
+
+            // Se for um número, empilha
+            if (token.matches("\\d+(\\.\\d+)?")) {
+                pilha.push(Double.parseDouble(token));
+            }
+
+            // Se for um operador (+ - * /), faz a chamada REST
+            else if (token.matches("[+\\-*/]")) {
+
+                // Desempilha operandos
+                double b = pilha.pop();
+                double a = pilha.pop();
+
+                // Chama o servidor REST para realizar a operação
+                double resultado = chamarServidorREST(token, a, b);
+
+                // Empilha o resultado
+                pilha.push(resultado);
+            }
+        }
+
+        // Ao final sobra apenas o resultado final
+        return pilha.pop();
+    }
+
+    // ============================================================
+    // Operação simples enviada ao servidor via POST (modo 2)
+    // ============================================================
+    private static double chamarServidorREST(String operador, double a, double b) throws Exception {
+
+        // Cria o objeto URI
+        URI uri = new URI("http://localhost:8080/calculadora.php");
+
+        // Converte URI para URL
+        URL url = uri.toURL();
+
+        // Abre a conexão HTTP
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+        // Configura o método POST
+        conn.setRequestMethod("POST");
+
+        // Habilita envio de dados
+        conn.setDoOutput(true);
+
+        // Informa o tipo de conteúdo
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+
+        // Traduz o operador para o código esperado pelo servidor
+        int codigo = switch (operador) {
+            case "+" -> 1;  // soma
+            case "-" -> 2;  // subtração
+            case "*" -> 3;  // multiplicação
+            case "/" -> 4;  // divisão
+            default -> throw new IllegalArgumentException("Operador inválido");
+        };
+
+        // Monta os parâmetros enviados na requisição POST
+        String params = "operacao=" + codigo + "&oper1=" + a + "&oper2=" + b;
+
+        // Envia para o servidor
+        conn.getOutputStream().write(params.getBytes());
+
+        // Lê a resposta JSON
+        String json = lerJSON(conn);
+
+        // Extrai o valor do campo resultado
+        String resultado = extrairCampoJSON(json, "resultado");
+
+        // Retorna como double
+        return Double.parseDouble(resultado);
+    }
+
+    // ============================================================
+    // Função para ler a resposta JSON retornada pelo servidor
+    // ============================================================
+    private static String lerJSON(HttpURLConnection conn) throws Exception {
+
+        // Abre leitor para ler a resposta do servidor
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream())
+        );
+
+        // Buffer para montar a string completa do JSON
+        StringBuilder sb = new StringBuilder();
+
+        // Lê linha por linha
+        String linha;
+        while ((linha = reader.readLine()) != null) {
+            sb.append(linha);
+        }
+
+        // Fecha o leitor
+        reader.close();
+
+        // Retorna o JSON completo como string
+        return sb.toString();
+    }
+
+    // ============================================================
+    // Função simples que extrai um campo específico do JSON
+    // ============================================================
+    private static String extrairCampoJSON(String json, String campo) {
+
+        // Monta o padrão buscado, ex.: "resultado":
+        String chave = "\"" + campo + "\":";
+
+        // Caso o campo não exista
+        if (!json.contains(chave))
+            return "0";
+
+        // Divide o JSON a partir da chave
+        String[] partes = json.split(chave);
+
+        // Pega o valor após a chave
+        String valor = partes[1].trim();
+
+        // Remove possíveis caracteres excedentes
+        valor = valor.split(",")[0].replace("}", "").trim();
+
+        // Remove aspas caso existam
+        return valor.replace("\"", "");
     }
 }
