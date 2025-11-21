@@ -78,8 +78,11 @@ try {
     $response['ok'] = true;
 
 } catch (Exception $ex) {
+    // Em caso de erro, enviar mensagem informativa
     $response['erro'] = $ex->getMessage();
+    // opcional: definir código HTTP 400 para erros de cliente
+    http_response_code(400);
 }
 
-// envia resposta JSON
-echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+// envia resposta JSON (sem pretty print para facilitar parsing)
+echo json_encode($response, JSON_UNESCAPED_UNICODE);

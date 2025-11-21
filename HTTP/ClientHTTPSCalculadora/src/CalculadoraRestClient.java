@@ -1,244 +1,315 @@
-// Importa classes necessárias para leitura de dados, conexão HTTP e manipulação de strings
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Random;
 import java.util.Scanner;
 import java.util.Stack;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-// Classe principal do cliente REST
+/**
+ * Cliente HTTP para a calculadora PHP.
+ *
+ * Comentários detalhados (linha a linha) especialmente nas partes de comunicação,
+ * conforme exigido pelo professor.
+ */
 public class CalculadoraRestClient {
 
-    public static void main(String[] args) {
+    // Configurações de retry
+    private static final int MAX_ATTEMPTS = 4; // número máximo de tentativas
+    private static final long BASE_DELAY_MS = 300; // tempo base para backoff exponencial
+    private static final Random RAND = new Random();
 
-        // Leitor de entrada do usuário
+    public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
 
-        // Menu inicial exibido ao usuário
+        // Cabeçalho de interface textual mínimo
         System.out.println("============== CALCULADORA REMOTA (REST) ==============");
         System.out.println("Escolha o modo de operação:");
         System.out.println("1 - Modo 1 (Servidor REST resolve a expressão completa)");
         System.out.println("2 - Modo 2 (Cliente resolve usando múltiplas chamadas REST)");
         System.out.print("Opção: ");
 
-        // Lê o modo escolhido
         int modo = scanner.nextInt();
-        scanner.nextLine();   // limpa buffer
+        scanner.nextLine();   // limpa buffer do Scanner
 
-        // Solicita a expressão ao usuário
         System.out.println("\nDigite a expressão (ex: (10+5)*3 ): ");
         String expressaoInfixa = scanner.nextLine();
 
-        // Converte a expressão de infixa para RPN
-        String expressaoRPN = RPNConverter.toRPN(expressaoInfixa);
+        // Converte a expressão infixa para RPN usando RPNConverter
+        String expressaoRPN;
+        try {
+            expressaoRPN = RPNConverter.toRPN(expressaoInfixa);
+        } catch (Exception e) {
+            System.out.println("Erro ao converter expressão: " + e.getMessage());
+            return;
+        }
+
         System.out.println("\nExpressão convertida para RPN: " + expressaoRPN);
 
         try {
-
-            // --- MODO 1 ---
             if (modo == 1) {
-
-                // Envia TODA a expressão para o servidor em um único POST
+                // modo 1: envia a RPN inteira para o servidor calcular
                 double resultado = calcularExpressaoCompletaREST(expressaoRPN);
-
                 System.out.println("\nResultado recebido do servidor REST: " + resultado);
-            }
-
-            // --- MODO 2 ---
-            else if (modo == 2) {
-
-                // Avalia a expressão passo a passo chamando o servidor para cada operação
+            } else if (modo == 2) {
+                // modo 2: cliente avalia RPN chamando o servidor para cada operação
                 double resultado = avaliarRPN_Cliente(expressaoRPN);
-
                 System.out.println("\nResultado final calculado pelo cliente (modo 2): " + resultado);
-            }
-
-            else {
+            } else {
                 System.out.println("Opção inválida!");
             }
-
         } catch (Exception e) {
-            System.out.println("Erro ao comunicar com servidor REST!");
+            System.out.println("Erro ao comunicar com servidor REST: " + e.getMessage());
             e.printStackTrace();
         }
     }
 
-    // ============================================================
-    // MODO 1 – Envia a expressão completa em RPN ao servidor REST
-    // ============================================================
+    // MODO 1 – envia a expressão completa em RPN ao servidor REST (com retry)
     private static double calcularExpressaoCompletaREST(String rpn) throws Exception {
-
-        // Cria o objeto URI com o endereço do servidor
-        URI uri = new URI("http://localhost:8080/calculadora.php");
-
-        // Converte URI para URL
-        URL url = uri.toURL();
-
-        // Abre a conexão HTTP
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-        // Define que será utilizado o método POST
-        conn.setRequestMethod("POST");
-
-        // Permite envio de dados no corpo da requisição
-        conn.setDoOutput(true);
-
-        // Informa o tipo de conteúdo enviado (formulário HTML)
-        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-
-        // Monta os parâmetros de envio: operacao=5 indica cálculo completo
+        // monta parâmetros codificados para POST
         String params = "operacao=5&expressao=" + URLEncoder.encode(rpn, StandardCharsets.UTF_8);
+        String urlStr = "http://localhost:8080/calculadora.php";
 
-        // Envia os parâmetros para o servidor via POST
-        conn.getOutputStream().write(params.getBytes());
+        // faz POST com retry e recebe JSON como String
+        String json = doPostWithRetry(urlStr, params);
 
-        // Lê a resposta JSON do servidor
-        String json = lerJSON(conn);
+        // Verifica se "ok" é true; se false, lança com a mensagem do campo "erro"
+        boolean ok = parseJsonBoolean(json, "ok");
+        if (!ok) {
+            String erro = parseJsonString(json, "erro");
+            throw new Exception("Servidor respondeu erro: " + erro);
+        }
 
-        // Extrai apenas o valor do campo "resultado"
-        String resultado = extrairCampoJSON(json, "resultado");
-
-        // Converte o resultado de String para double
-        return Double.parseDouble(resultado);
+        // extrai campo resultado (número)
+        String valor = parseJsonValue(json, "resultado");
+        return parseResultadoParaDouble(valor);
     }
 
-    // ============================================================
-    // MODO 2 – Cliente resolve usando múltiplas chamadas ao servidor
-    // ============================================================
+    // MODO 2 – avalia RPN localmente chamando servidor para cada operação (com retry em cada chamada)
     public static double avaliarRPN_Cliente(String rpn) throws Exception {
-
-        // Pilha utilizada para avaliar a expressão RPN
         Stack<Double> pilha = new Stack<>();
-
-        // Divide a expressão RPN em tokens
         String[] tokens = rpn.split("\\s+");
 
-        // Percorre cada token
         for (String token : tokens) {
-
-            // Se for um número, empilha
-            if (token.matches("\\d+(\\.\\d+)?")) {
+            // aceita negativos, decimais e expoente (mesma regex do parse)
+            if (token.matches("[+-]?\\d+(\\.\\d+)?([eE][+-]?\\d+)?") || token.matches("\\.[0-9]+([eE][+-]?\\d+)?")) {
                 pilha.push(Double.parseDouble(token));
-            }
-
-            // Se for um operador (+ - * /), faz a chamada REST
-            else if (token.matches("[+\\-*/]")) {
-
-                // Desempilha operandos
+            } else if (token.matches("[+\\-*/]")) {
+                if (pilha.size() < 2) throw new IllegalArgumentException("RPN mal formada: operandos insuficientes.");
                 double b = pilha.pop();
                 double a = pilha.pop();
 
-                // Chama o servidor REST para realizar a operação
-                double resultado = chamarServidorREST(token, a, b);
-
-                // Empilha o resultado
+                double resultado = chamarServidorREST(token, a, b); // chama operação básica no servidor
                 pilha.push(resultado);
+            } else {
+                throw new IllegalArgumentException("Token inválido na RPN (cliente): " + token);
             }
         }
 
-        // Ao final sobra apenas o resultado final
+        if (pilha.isEmpty()) throw new IllegalStateException("Erro ao avaliar expressão.");
         return pilha.pop();
     }
 
-    // ============================================================
-    // Operação simples enviada ao servidor via POST (modo 2)
-    // ============================================================
+    // Chama operação simples no servidor (modo 2) — usa retry dentro de doPostWithRetry
     private static double chamarServidorREST(String operador, double a, double b) throws Exception {
-
-        // Cria o objeto URI
-        URI uri = new URI("http://localhost:8080/calculadora.php");
-
-        // Converte URI para URL
-        URL url = uri.toURL();
-
-        // Abre a conexão HTTP
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-        // Configura o método POST
-        conn.setRequestMethod("POST");
-
-        // Habilita envio de dados
-        conn.setDoOutput(true);
-
-        // Informa o tipo de conteúdo
-        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-
-        // Traduz o operador para o código esperado pelo servidor
-        int codigo = switch (operador) {
-            case "+" -> 1;  // soma
-            case "-" -> 2;  // subtração
-            case "*" -> 3;  // multiplicação
-            case "/" -> 4;  // divisão
-            default -> throw new IllegalArgumentException("Operador inválido");
-        };
-
-        // Monta os parâmetros enviados na requisição POST
-        String params = "operacao=" + codigo + "&oper1=" + a + "&oper2=" + b;
-
-        // Envia para o servidor
-        conn.getOutputStream().write(params.getBytes());
-
-        // Lê a resposta JSON
-        String json = lerJSON(conn);
-
-        // Extrai o valor do campo resultado
-        String resultado = extrairCampoJSON(json, "resultado");
-
-        // Retorna como double
-        return Double.parseDouble(resultado);
-    }
-
-    // ============================================================
-    // Função para ler a resposta JSON retornada pelo servidor
-    // ============================================================
-    private static String lerJSON(HttpURLConnection conn) throws Exception {
-
-        // Abre leitor para ler a resposta do servidor
-        BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream())
-        );
-
-        // Buffer para montar a string completa do JSON
-        StringBuilder sb = new StringBuilder();
-
-        // Lê linha por linha
-        String linha;
-        while ((linha = reader.readLine()) != null) {
-            sb.append(linha);
+        int codigo;
+        switch (operador) {
+            case "+": codigo = 1; break;
+            case "-": codigo = 2; break;
+            case "*": codigo = 3; break;
+            case "/": codigo = 4; break;
+            default: throw new IllegalArgumentException("Operador inválido: " + operador);
         }
 
-        // Fecha o leitor
-        reader.close();
+        // cria params codificados
+        String params = "operacao=" + codigo
+                + "&oper1=" + URLEncoder.encode(String.valueOf(a), StandardCharsets.UTF_8)
+                + "&oper2=" + URLEncoder.encode(String.valueOf(b), StandardCharsets.UTF_8);
 
-        // Retorna o JSON completo como string
-        return sb.toString();
+        String urlStr = "http://localhost:8080/calculadora.php";
+
+        // faz POST com retry
+        String json = doPostWithRetry(urlStr, params);
+
+        // verifica se ok
+        boolean ok = parseJsonBoolean(json, "ok");
+        if (!ok) {
+            String erro = parseJsonString(json, "erro");
+            throw new Exception("Servidor respondeu erro: " + erro);
+        }
+
+        // extrai resultado
+        String valor = parseJsonValue(json, "resultado");
+        return parseResultadoParaDouble(valor);
     }
 
-    // ============================================================
-    // Função simples que extrai um campo específico do JSON
-    // ============================================================
-    private static String extrairCampoJSON(String json, String campo) {
+    // Realiza POST com política de retry exponencial e tratamento de códigos HTTP
+    private static String doPostWithRetry(String urlStr, String params) throws Exception {
+        int attempt = 0;
+        Exception lastEx = null;
 
-        // Monta o padrão buscado, ex.: "resultado":
-        String chave = "\"" + campo + "\":";
+        while (attempt < MAX_ATTEMPTS) {
+            attempt++;
+            try {
+                return doPost(urlStr, params);
+            } catch (Exception ex) {
+                lastEx = ex;
 
-        // Caso o campo não exista
-        if (!json.contains(chave))
-            return "0";
+                // se a mensagem da exceção contém HTTP_ERROR_CODE:XXX, decidimos retry ou não
+                String msg = ex.getMessage() == null ? "" : ex.getMessage();
 
-        // Divide o JSON a partir da chave
-        String[] partes = json.split(chave);
+                // tenta extrair código HTTP se presente no texto da exception
+                Integer code = extractHttpCode(msg);
 
-        // Pega o valor após a chave
-        String valor = partes[1].trim();
+                if (code != null) {
+                    if (code >= 400 && code < 500) {
+                        // erro do cliente; não faz retry
+                        throw ex;
+                    }
+                    // 5xx -> podemos tentar novamente
+                }
 
-        // Remove possíveis caracteres excedentes
-        valor = valor.split(",")[0].replace("}", "").trim();
+                // backoff exponencial com jitter simples
+                long delay = BASE_DELAY_MS * (1L << (attempt - 1));
+                long jitter = RAND.nextInt(100);
+                long totalDelay = delay + jitter;
 
-        // Remove aspas caso existam
-        return valor.replace("\"", "");
+                System.out.println("Tentativa " + attempt + " falhou: " + ex.getMessage() + ". Retentando em " + totalDelay + "ms");
+                try { Thread.sleep(totalDelay); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw ie; }
+            }
+        }
+
+        throw new Exception("Todas tentativas falharam.", lastEx);
+    }
+
+    // Faz o POST e retorna o JSON como String; lança Exception em caso de erro (inclui código HTTP)
+    private static String doPost(String urlStr, String params) throws Exception {
+        URI uri = new URI(urlStr);
+        URL url = uri.toURL();
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+        // timeout para evitar bloqueio indefinido
+        conn.setConnectTimeout(5000); // 5s connect
+        conn.setReadTimeout(5000);    // 5s read
+
+        // define método HTTP POST
+        conn.setRequestMethod("POST");
+
+        // indica que haverá envio de corpo na requisição
+        conn.setDoOutput(true);
+
+        // informa o tipo de conteúdo (form-urlencoded com charset)
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+
+        // codifica payload em bytes UTF-8
+        byte[] payload = params.getBytes(StandardCharsets.UTF_8);
+        conn.setRequestProperty("Content-Length", Integer.toString(payload.length));
+
+        // Envia os dados (usa try-with-resources para garantir fechamento do OutputStream)
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(payload);
+            os.flush();
+        }
+
+        // obtém código de status HTTP da resposta
+        int status = conn.getResponseCode();
+
+        // seleciona InputStream apropriado (entrada normal para 2xx, error stream para outros)
+        InputStream is = (status >= 200 && status < 300) ? conn.getInputStream() : conn.getErrorStream();
+
+        // lê todo o corpo da resposta como String (UTF-8)
+        StringBuilder sb = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+                sb.append('\n'); // preserva quebras para facilitar debug (parser lida com whitespace)
+            }
+        }
+
+        String response = sb.toString().trim();
+
+        if (status < 200 || status >= 300) {
+            // lança com código para doPostWithRetry decidir reter ou não
+            throw new Exception("HTTP_ERROR_CODE:" + status + " BODY:" + response);
+        }
+
+        return response;
+    }
+
+    // utilitário: extrai código HTTP de mensagem de exceção previamente formatada
+    private static Integer extractHttpCode(String msg) {
+        if (msg == null) return null;
+        Pattern p = Pattern.compile("HTTP_ERROR_CODE:(\\d+)");
+        Matcher m = p.matcher(msg);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
+    // Extrai campo simples do JSON - método genérico e robusto o suficiente para este uso.
+    // Lê string, número, boolean ou null.
+    private static String parseJsonValue(String json, String field) {
+        if (json == null) return null;
+        String key = "\"" + field + "\"";
+        int idx = json.indexOf(key);
+        if (idx == -1) return null;
+
+        // localiza ':' após a chave
+        int colon = json.indexOf(':', idx);
+        if (colon == -1) return null;
+
+        // pega substring após ':'
+        String after = json.substring(colon + 1).trim();
+
+        if (after.startsWith("\"")) {
+            // valor é string: pega até próxima aspas não escapada
+            int i = 1;
+            StringBuilder sb = new StringBuilder();
+            while (i < after.length()) {
+                char c = after.charAt(i);
+                if (c == '"' && after.charAt(i-1) != '\\') break;
+                sb.append(c);
+                i++;
+            }
+            return sb.toString();
+        } else {
+            // número, boolean ou null — pega até ',' ou '}' ou ']'
+            String token = after.split("[,}\\]]", 2)[0].trim();
+            return token;
+        }
+    }
+
+    // Extrai string (ou null) do JSON para um campo
+    private static String parseJsonString(String json, String field) {
+        String v = parseJsonValue(json, field);
+        if (v == null || v.equals("null")) return null;
+        return v;
+    }
+
+    // Extrai boolean do JSON (se presente)
+    private static boolean parseJsonBoolean(String json, String field) {
+        String v = parseJsonValue(json, field);
+        if (v == null) return false;
+        v = v.trim().toLowerCase();
+        return v.equals("true") || v.equals("1");
+    }
+
+    // Converte string extraída do JSON para double (trata null e valores vazios)
+    private static double parseResultadoParaDouble(String s) {
+        if (s == null) throw new IllegalArgumentException("Resultado nulo no JSON");
+        s = s.trim();
+        if (s.equals("null") || s.equals("")) throw new IllegalArgumentException("Resultado indefinido no JSON");
+        return Double.parseDouble(s);
     }
 }
