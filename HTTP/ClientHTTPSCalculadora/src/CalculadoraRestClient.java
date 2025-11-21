@@ -92,30 +92,41 @@ public class CalculadoraRestClient {
         return parseResultadoParaDouble(valor);
     }
 
-    // MODO 2 – avalia RPN localmente chamando servidor para cada operação (com retry em cada chamada)
+    // MODO 2 – avalia a expressão em RPN localmente, chamando servidor para cada operação básica (com retry)
     public static double avaliarRPN_Cliente(String rpn) throws Exception {
         Stack<Double> pilha = new Stack<>();
         String[] tokens = rpn.split("\\s+");
 
         for (String token : tokens) {
-            // aceita negativos, decimais e expoente (mesma regex do parse)
-            if (token.matches("[+-]?\\d+(\\.\\d+)?([eE][+-]?\\d+)?") || token.matches("\\.[0-9]+([eE][+-]?\\d+)?")) {
-                pilha.push(Double.parseDouble(token));
-            } else if (token.matches("[+\\-*/]")) {
-                if (pilha.size() < 2) throw new IllegalArgumentException("RPN mal formada: operandos insuficientes.");
+
+            // número simples: inteiro, negativo ou decimal com ponto/vírgula
+            if (token.matches("[+-]?\\d+(\\.\\d+)?") || token.matches("[+-]?\\d+(,\\d+)?")) {
+                pilha.push(Double.parseDouble(token.replace(",", ".")));
+            }
+
+            // operador básico
+            else if (token.matches("[+\\-*/]")) {
+                if (pilha.size() < 2)
+                    throw new IllegalArgumentException("RPN mal formada: operandos insuficientes.");
+
                 double b = pilha.pop();
                 double a = pilha.pop();
 
-                double resultado = chamarServidorREST(token, a, b); // chama operação básica no servidor
+                double resultado = chamarServidorREST(token, a, b);
                 pilha.push(resultado);
-            } else {
-                throw new IllegalArgumentException("Token inválido na RPN (cliente): " + token);
+            }
+
+            else {
+                throw new IllegalArgumentException("Token inválido: " + token);
             }
         }
 
-        if (pilha.isEmpty()) throw new IllegalStateException("Erro ao avaliar expressão.");
+        if (pilha.size() != 1)
+            throw new IllegalStateException("Erro ao avaliar a expressão.");
+
         return pilha.pop();
     }
+
 
     // Chama operação simples no servidor (modo 2) — usa retry dentro de doPostWithRetry
     private static double chamarServidorREST(String operador, double a, double b) throws Exception {
